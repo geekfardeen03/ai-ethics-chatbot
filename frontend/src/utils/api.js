@@ -1,4 +1,4 @@
-const API_BASE = "/api";
+const API_BASE = "https://ai-ethics-chatbot-xi.vercel.app/";
 
 export async function sendChatMessage({ messages, currentDomain, currentIntent }) {
   const response = await fetch(`${API_BASE}/chat`, {
