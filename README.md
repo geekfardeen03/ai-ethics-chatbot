@@ -1,3 +1,12 @@
+# 🤖 AI Ethics Chatbot
+
+🚀 **Live Demo:** https://ai-ethics-chatbot-xi.vercel.app
+
+An intelligent, domain-aware AI ethics advisor that provides context-aware guidance on bias, fairness, privacy, and governance.
+
+
+
+
 # AI Ethics Chatbot
 
 An AI-powered conversational advisor for ethical AI questions — covering bias, fairness, privacy, transparency, and governance across domains like healthcare, finance, HR, legal, and education.
