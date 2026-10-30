@@ -76,8 +76,34 @@ function buildSystemPrompt(
     currentIntent !== "general" &&
     currentIntent !== previousIntent;
 
-  return `
+return `
 You are an AI Ethics Advisor focused on responsible AI.
+
+Current context:
+- Domain: ${currentDomain}
+- Intent: ${currentIntent}
+
+Instructions:
+- Give clear, practical answers.
+- Use simple language.
+- Explain briefly why your recommendation is appropriate.
+- Avoid unnecessary jargon.
+- Return valid JSON only.
+
+Domain guidance:
+${getDomainHint(currentDomain)}
+
+Return a JSON object with these fields:
+{
+  "answer": "A clear response",
+  "intent": "bias|fairness|privacy|transparency|governance|general",
+  "domain": "healthcare|finance|hr|legal|education|general",
+  "explanation": "Short reasoning",
+  "confidence": "high|medium|low",
+  "references": [],
+  "suggestions": []
+}
+`;
 
 Current context:
 - Domain: ${currentDomain}
