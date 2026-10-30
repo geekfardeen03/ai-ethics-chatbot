@@ -1,18 +1,17 @@
-```javascript
 const domains = {
   healthcare: ["patient", "hospital", "doctor", "medical", "diagnosis"],
   finance: ["loan", "bank", "credit", "fraud", "investment"],
   hr: ["hiring", "resume", "employee", "recruit", "salary"],
   legal: ["court", "judge", "law", "gdpr", "compliance"],
-  education: ["student", "exam", "school", "grading", "university"],
+  education: ["student", "exam", "school", "grading", "university"]
 };
 
 const intents = {
-  bias: ["bias", "biased", "discrimination", "unfair"],
-  fairness: ["fair", "equal", "justice", "equity"],
+  bias: ["bias", "discrimination", "unfair"],
+  fairness: ["fair", "equal", "justice"],
   privacy: ["privacy", "data", "gdpr", "consent"],
   transparency: ["explain", "black box", "interpret"],
-  governance: ["policy", "regulation", "law", "oversight"],
+  governance: ["policy", "regulation", "law"]
 };
 
 function classify(text, categories) {
@@ -20,26 +19,26 @@ function classify(text, categories) {
     return "general";
   }
 
-  const input = text.toLowerCase();
-  let bestCategory = "general";
-  let maxScore = 0;
+  const normalizedText = text.toLowerCase();
+  const scores = {};
 
-  for (const [category, keywords] of Object.entries(categories)) {
-    let score = 0;
+  for (const category in categories) {
+    scores[category] = 0;
 
-    for (const keyword of keywords) {
-      if (input.includes(keyword)) {
-        score++;
+    for (const word of categories[category]) {
+      if (normalizedText.includes(word)) {
+        scores[category]++;
       }
-    }
-
-    if (score > maxScore) {
-      maxScore = score;
-      bestCategory = category;
     }
   }
 
-  return maxScore > 0 ? bestCategory : "general";
+  const bestCategory = Object.keys(scores).reduce((a, b) =>
+    scores[a] >= scores[b] ? a : b
+  );
+
+  return scores[bestCategory] > 0
+    ? bestCategory
+    : "general";
 }
 
 function detectDomainML(text) {
@@ -52,6 +51,5 @@ function detectIntentML(text) {
 
 module.exports = {
   detectDomainML,
-  detectIntentML,
+  detectIntentML
 };
-```
