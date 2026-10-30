@@ -1,62 +1,127 @@
+```javascript
 require("dotenv").config();
+
 const express = require("express");
 const cors = require("cors");
 const rateLimit = require("express-rate-limit");
 const Groq = require("groq-sdk");
-const { detectDomainML, detectIntentML } = require("./mlModel");
-
 
 const app = express();
+app.set("trust proxy", 1);
+
 const PORT = process.env.PORT || 3001;
+const MODEL = "openai/gpt-oss-120b";
 
-// ── Groq client ───────────────────────────────────────────────────────────────
-const groq = new Groq({ apiKey: process.env.GROQ_API_KEY });
+// Validate required environment variables
+if (!process.env.GROQ_API_KEY) {
+  console.error("Missing GROQ_API_KEY environment variable.");
+  process.exit(1);
+}
 
-// ── Middleware ────────────────────────────────────────────────────────────────
-app.use(cors({ origin: process.env.FRONTEND_URL || "http://localhost:5173" }));
-app.use(express.json());
+if (!process.env.FRONTEND_URL && process.env.NODE_ENV === "production") {
+  console.warn("FRONTEND_URL is not configured.");
+}
+
+// Groq client
+const groq = new Groq({
+  apiKey: process.env.GROQ_API_KEY,
+});
+
+// Middleware
+app.use(
+  cors({
+    origin: process.env.FRONTEND_URL || "http://localhost:5173",
+  })
+);
+
+app.use(express.json({ limit: "1mb" }));
 
 const limiter = rateLimit({
   windowMs: 60 * 1000,
   max: 30,
-  message: { error: "Too many requests, please slow down." },
+  message: {
+    error: "Too many requests. Please slow down.",
+  },
 });
+
 app.use("/api/", limiter);
 
-// ── Domain & Intent keywords ──────────────────────────────────────────────────
+// Domain keywords
 const DOMAINS = {
-  healthcare: ["patient","hospital","medical","diagnosis","clinical","doctor","nurse","ehr","drug","treatment","health","radiology","imaging","surgery","therapy","pharma","fda","telemedicine","ai doctor","mental health"],
-  finance: ["loan","credit","bank","fraud","investment","trading","insurance","mortgage","fintech","risk","portfolio","aml","kyc","stock","interest","payment","financial","algorithmic trading","credit score"],
-  hr: ["hiring","recruit","resume","candidate","employee","hr","workforce","interview","promotion","salary","performance","diversity","talent","job","applicant","onboarding","termination"],
-  legal: ["court","judge","sentencing","criminal","legal","law","attorney","compliance","gdpr","regulation","lawsuit","contract","ccpa","rights","due process","warrant","recidivism","predictive policing"],
-  education: ["student","school","grade","exam","university","teacher","learning","curriculum","admission","academic","edtech","classroom","assessment","plagiarism","tutoring","grading"],
+  healthcare: [
+    "patient", "hospital", "medical", "diagnosis", "clinical",
+    "doctor", "nurse", "ehr", "drug", "treatment", "health",
+    "radiology", "imaging", "surgery", "therapy", "pharma",
+    "fda", "telemedicine", "ai doctor", "mental health",
+  ],
+  finance: [
+    "loan", "credit", "bank", "fraud", "investment", "trading",
+    "insurance", "mortgage", "fintech", "risk", "portfolio",
+    "aml", "kyc", "stock", "interest", "payment", "financial",
+    "algorithmic trading", "credit score",
+  ],
+  hr: [
+    "hiring", "recruit", "resume", "candidate", "employee", "hr",
+    "workforce", "interview", "promotion", "salary", "performance",
+    "diversity", "talent", "job", "applicant", "onboarding",
+    "termination",
+  ],
+  legal: [
+    "court", "judge", "sentencing", "criminal", "legal", "law",
+    "attorney", "compliance", "gdpr", "regulation", "lawsuit",
+    "contract", "ccpa", "rights", "due process", "warrant",
+    "recidivism", "predictive policing",
+  ],
+  education: [
+    "student", "school", "grade", "exam", "university", "teacher",
+    "learning", "curriculum", "admission", "academic", "edtech",
+    "classroom", "assessment", "plagiarism", "tutoring", "grading",
+  ],
 };
 
+// Intent keywords
 const INTENTS = {
-  bias: ["bias","biased","discriminat","unfair","prejudice","stereotype","skew","inequit","disparity","marginalize","underrepresent"],
-  fairness: ["fair","equit","equal","impartial","just","balance","neutral","objective","representative","inclusive","diverse"],
-  privacy: ["privacy","data","personal","gdpr","consent","surveillance","track","collect","share","secure","breach","confidential","anonymize","pii","sensitive"],
-  transparency: ["transparent","explain","interpretab","black box","xai","audit","trace","understand","reason","justify","accountab","openness","disclosure"],
-  governance: ["govern","regulat","policy","compliance","law","legal","framework","standard","guideline","oversight","control","enforce","responsible ai"],
+  bias: [
+    "bias", "biased", "discriminat", "unfair", "prejudice",
+    "stereotype", "skew", "inequit", "disparity", "marginalize",
+    "underrepresent",
+  ],
+  fairness: [
+    "fair", "equit", "equal", "impartial", "just", "balance",
+    "neutral", "objective", "representative", "inclusive",
+    "diverse",
+  ],
+  privacy: [
+    "privacy", "data", "personal", "gdpr", "consent",
+    "surveillance", "track", "collect", "share", "secure",
+    "breach", "confidential", "anonymize", "pii", "sensitive",
+  ],
+  transparency: [
+    "transparent", "explain", "interpretab", "black box", "xai",
+    "audit", "trace", "understand", "reason", "justify",
+    "accountab", "openness", "disclosure",
+  ],
+  governance: [
+    "govern", "regulat", "policy", "compliance", "law", "legal",
+    "framework", "standard", "guideline", "oversight", "control",
+    "enforce", "responsible ai",
+  ],
 };
 
-// improved version: score-based matching instead of first keyword hit
-
+// Score-based domain detection
 function detectDomain(text) {
-  if (!text || typeof text !== "string") return "general";
+  if (!text || typeof text !== "string") {
+    return "general";
+  }
 
   const input = text.toLowerCase();
   let bestDomain = "general";
   let maxScore = 0;
 
-  for (const domain in DOMAINS) {
-    let score = 0;
-
-    for (const keyword of DOMAINS[domain]) {
-      if (input.includes(keyword)) {
-        score++;
-      }
-    }
+  for (const [domain, keywords] of Object.entries(DOMAINS)) {
+    const score = keywords.filter((keyword) =>
+      input.includes(keyword)
+    ).length;
 
     if (score > maxScore) {
       maxScore = score;
@@ -64,28 +129,23 @@ function detectDomain(text) {
     }
   }
 
-  // small safeguard: avoid false positives
-  if (maxScore === 0) return "general";
-
-  return bestDomain;
+  return maxScore === 0 ? "general" : bestDomain;
 }
 
-
+// Score-based intent detection
 function detectIntent(text) {
-  if (!text || typeof text !== "string") return "general";
+  if (!text || typeof text !== "string") {
+    return "general";
+  }
 
   const input = text.toLowerCase();
   let bestIntent = "general";
   let maxScore = 0;
 
-  for (const intent in INTENTS) {
-    let score = 0;
-
-    for (const keyword of INTENTS[intent]) {
-      if (input.includes(keyword)) {
-        score++;
-      }
-    }
+  for (const [intent, keywords] of Object.entries(INTENTS)) {
+    const score = keywords.filter((keyword) =>
+      input.includes(keyword)
+    ).length;
 
     if (score > maxScore) {
       maxScore = score;
@@ -93,13 +153,16 @@ function detectIntent(text) {
     }
   }
 
-  if (maxScore === 0) return "general";
-
-  return bestIntent;
+  return maxScore === 0 ? "general" : bestIntent;
 }
 
-// ── System prompt builder ─────────────────────────────────────────────────────
-function buildSystemPrompt(currentDomain, currentIntent, previousDomain, previousIntent) {
+// Build the system prompt
+function buildSystemPrompt(
+  currentDomain,
+  currentIntent,
+  previousDomain,
+  previousIntent
+) {
   const domainChanged =
     previousDomain &&
     currentDomain !== "general" &&
@@ -110,19 +173,18 @@ function buildSystemPrompt(currentDomain, currentIntent, previousDomain, previou
     currentIntent !== "general" &&
     currentIntent !== previousIntent;
 
-  // small helper for domain-specific hints
   function getDomainHint(domain) {
     switch (domain) {
       case "healthcare":
-        return "Use HIPAA and clinical safety considerations.";
+        return "Consider HIPAA and clinical safety.";
       case "finance":
-        return "Reference fairness in credit scoring and financial regulations.";
+        return "Consider fairness in credit scoring and relevant financial regulations.";
       case "hr":
         return "Consider hiring bias and EEOC guidelines.";
       case "legal":
         return "Focus on due process and legal accountability.";
       case "education":
-        return "Include fairness in grading and student data privacy.";
+        return "Consider fairness in grading and student data privacy.";
       default:
         return "Use general AI ethics frameworks.";
     }
@@ -134,94 +196,115 @@ You are an AI Ethics Advisor focused on responsible AI.
 Context:
 - Domain: ${currentDomain}
 - Intent: ${currentIntent}
-${domainChanged ? `- NOTE: Domain changed from ${previousDomain} to ${currentDomain}. Acknowledge naturally.` : ""}
-${intentChanged ? `- NOTE: Intent changed from ${previousIntent} to ${currentIntent}. Adjust reasoning.` : ""}
+${domainChanged ? `- Domain changed from ${previousDomain} to ${currentDomain}. Acknowledge naturally.` : ""}
+${intentChanged ? `- Intent changed from ${previousIntent} to ${currentIntent}. Adjust your answer.` : ""}
 
 Instructions:
-- Give clear, practical answers (not generic theory)
-- Adapt response to the domain context
-- Include a short explanation ("why this answer")
-- Avoid unnecessary jargon
+- Give clear, practical answers.
+- Adapt the answer to the domain.
+- Include a short explanation of why the answer is appropriate.
+- Avoid unnecessary jargon.
+- Do not claim that legal or regulatory guidance is definitive.
 
-Domain hint:
+Domain guidance:
 ${getDomainHint(currentDomain)}
 
-Output format (STRICT JSON ONLY):
+Return valid JSON only, with this structure:
 {
-  "answer": "2-5 sentence response (HTML allowed)",
+  "answer": "A response of 2-5 sentences",
   "intent": "bias|fairness|privacy|transparency|governance|general",
   "domain": "healthcare|finance|hr|legal|education|general",
-  "explanation": "short reasoning behind answer",
+  "explanation": "Short reasoning behind the answer",
   "confidence": "high|medium|low",
-  "references": ["law or framework"],
-  "suggestions": ["follow-up question 1", "follow-up question 2"]
+  "references": ["Relevant law or framework"],
+  "suggestions": ["Follow-up question 1", "Follow-up question 2"]
 }
+
+Do not wrap the JSON in Markdown code fences.
 `;
 }
 
-// ── Chat endpoint ─────────────────────────────────────────────────────────────
+// Chat endpoint
 app.post("/api/chat", async (req, res) => {
-  const { messages, currentDomain = "general", currentIntent = "general" } = req.body;
+  const {
+    messages,
+    currentDomain = "general",
+    currentIntent = "general",
+  } = req.body;
 
-  if (!messages || !Array.isArray(messages) || messages.length === 0) {
-    return res.status(400).json({ error: "messages array is required." });
+  if (
+    !Array.isArray(messages) ||
+    messages.length === 0 ||
+    !messages.every(
+      (message) =>
+        message &&
+        ["user", "assistant"].includes(message.role) &&
+        typeof message.content === "string"
+    )
+  ) {
+    return res.status(400).json({
+      error: "A non-empty messages array with valid roles and string content is required.",
+    });
   }
 
-  // resolve domain & intent with fallback to preserve conversation context
+  const latestMessage = messages[messages.length - 1].content;
 
-// safely extract latest message
-const latestMessageObj = messages[messages.length - 1];
-const latestMessage = latestMessageObj?.content || "";
+  const detectedDomain = detectDomain(latestMessage);
+  const detectedIntent = detectIntent(latestMessage);
 
-// run detection (score-based functions)
-let detectedDomain = detectDomain(latestMessage);
-let detectedIntent = detectIntent(latestMessage);
+  const previousDomain = currentDomain;
+  const previousIntent = currentIntent;
 
-// keep previous state
-const previousDomain = currentDomain;
-const previousIntent = currentIntent;
+  const resolvedDomain =
+    detectedDomain === "general" && previousDomain !== "general"
+      ? previousDomain
+      : detectedDomain;
 
-// resolve domain with fallback
-let resolvedDomain = detectedDomain;
-if (detectedDomain === "general" && previousDomain !== "general") {
-  resolvedDomain = previousDomain;
-}
+  const resolvedIntent =
+    detectedIntent === "general" && previousIntent !== "general"
+      ? previousIntent
+      : detectedIntent;
 
-// resolve intent with fallback
-let resolvedIntent = detectedIntent;
-if (detectedIntent === "general" && previousIntent !== "general") {
-  resolvedIntent = previousIntent;
-}
+  const domainChanged =
+    resolvedDomain !== "general" &&
+    previousDomain !== "general" &&
+    resolvedDomain !== previousDomain;
 
-// detect meaningful shifts only
-const domainChanged =
-  resolvedDomain !== "general" &&
-  previousDomain !== "general" &&
-  resolvedDomain !== previousDomain;
-
-const intentChanged =
-  resolvedIntent !== "general" &&
-  previousIntent !== "general" &&
-  resolvedIntent !== previousIntent;
+  const intentChanged =
+    resolvedIntent !== "general" &&
+    previousIntent !== "general" &&
+    resolvedIntent !== previousIntent;
 
   try {
     const completion = await groq.chat.completions.create({
-      model: "llama-3.3-70b-versatile",
+      model: MODEL,
       max_tokens: 1024,
       messages: [
         {
           role: "system",
-          content: buildSystemPrompt(resolvedDomain, resolvedIntent, previousDomain, previousIntent),
+          content: buildSystemPrompt(
+            resolvedDomain,
+            resolvedIntent,
+            previousDomain,
+            previousIntent
+          ),
         },
-        ...messages.map((m) => ({ role: m.role, content: m.content })),
+        ...messages,
       ],
     });
 
-    const rawText = completion.choices[0]?.message?.content || "{}";
+    const rawText =
+      completion.choices?.[0]?.message?.content || "{}";
 
     let parsed;
+
     try {
-      parsed = JSON.parse(rawText.replace(/```json|```/g, "").trim());
+      const cleanedText = rawText
+        .replace(/```json/gi, "")
+        .replace(/```/g, "")
+        .trim();
+
+      parsed = JSON.parse(cleanedText);
     } catch {
       parsed = {
         answer: rawText,
@@ -244,18 +327,48 @@ const intentChanged =
       previousIntent,
     });
   } catch (err) {
-    console.error("Groq API error:", err.message);
-    return res.status(500).json({ error: "Failed to get AI response: " + err.message });
+    console.error("Groq API error:", {
+      status: err.status,
+      message: err.message,
+      code: err.code,
+    });
+
+    if (err.status === 401) {
+      return res.status(502).json({
+        error: "The AI service rejected the API credentials. Check GROQ_API_KEY in the backend environment.",
+      });
+    }
+
+    if (err.status === 404) {
+      return res.status(502).json({
+        error: "The configured AI model is unavailable. Check the model ID and account access.",
+      });
+    }
+
+    if (err.status === 429) {
+      return res.status(429).json({
+        error: "The AI service rate limit was reached. Please try again shortly.",
+      });
+    }
+
+    return res.status(502).json({
+      error: "The AI service could not complete your request. Please try again later.",
+    });
   }
 });
 
-// ── Health check ──────────────────────────────────────────────────────────────
+// Health check
 app.get("/api/health", (req, res) => {
-  res.json({ status: "ok", model: "llama-3.3-70b-versatile (Groq)", timestamp: new Date().toISOString() });
+  res.json({
+    status: "ok",
+    model: `${MODEL} (Groq)`,
+    timestamp: new Date().toISOString(),
+  });
 });
 
+// Start server
 app.listen(PORT, () => {
-  console.log(`\n🚀 AI Ethics Chatbot (Groq) running on http://localhost:${PORT}`);
-  console.log(`   Health: http://localhost:${PORT}/api/health`);
-  console.log(`   Chat:   POST http://localhost:${PORT}/api/chat\n`);
+  console.log(`AI Ethics Chatbot running on port ${PORT}`);
+  console.log(`Configured Groq model: ${MODEL}`);
 });
+```
