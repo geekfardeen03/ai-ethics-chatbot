@@ -1,331 +1,426 @@
-```javascript
 require("dotenv").config();
 
 const express = require("express");
 const cors = require("cors");
 const rateLimit = require("express-rate-limit");
 const Groq = require("groq-sdk");
-const { detectDomainML, detectIntentML } = require("./mlModel");
+
+const {
+  detectDomainML,
+  detectIntentML
+} = require("./mlModel");
 
 const app = express();
+
 app.set("trust proxy", 1);
 
 const PORT = process.env.PORT || 3001;
 const MODEL = "openai/gpt-oss-120b";
 
+const FRONTEND_URL =
+  process.env.FRONTEND_URL ||
+  "http://localhost:5173";
+
 if (!process.env.GROQ_API_KEY) {
-  console.error("GROQ_API_KEY is missing from the environment.");
+  console.error(
+    "GROQ_API_KEY is missing from the environment."
+  );
+
   process.exit(1);
 }
 
 const groq = new Groq({
-  apiKey: process.env.GROQ_API_KEY,
+  apiKey: process.env.GROQ_API_KEY
 });
 
-// Middleware
 app.use(
   cors({
-    origin: process.env.FRONTEND_URL || "http://localhost:5173",
+    origin: [
+      FRONTEND_URL,
+      "http://localhost:5173",
+      "http://127.0.0.1:5173"
+    ],
+    methods: ["GET", "POST", "OPTIONS"],
+    allowedHeaders: ["Content-Type", "Authorization"]
   })
 );
 
 app.use(express.json({ limit: "1mb" }));
 
-const limiter = rateLimit({
+const apiLimiter = rateLimit({
   windowMs: 60 * 1000,
   max: 30,
+  standardHeaders: true,
+  legacyHeaders: false,
   message: {
-    error: "Too many requests. Please try again later.",
-  },
+    error: "Too many requests. Please wait a minute and try again."
+  }
 });
 
-app.use("/api/", limiter);
+app.use("/api/", apiLimiter);
 
-// Domain-specific guidance
 function getDomainHint(domain) {
-  switch (domain) {
-    case "healthcare":
-      return "Consider patient privacy, HIPAA, and clinical safety.";
-    case "finance":
-      return "Consider financial fairness, credit scoring, and relevant regulations.";
-    case "hr":
-      return "Consider hiring bias, equal opportunity, and EEOC guidance.";
-    case "legal":
-      return "Consider due process, legal accountability, and applicable laws.";
-    case "education":
-      return "Consider fair grading, accessibility, and student data privacy.";
-    default:
-      return "Use general responsible AI and ethical principles.";
-  }
+  const hints = {
+    healthcare:
+      "Focus on patient safety, medical privacy, informed consent, accessibility, and fairness in healthcare AI.",
+
+    finance:
+      "Focus on financial fairness, credit discrimination, explainability, fraud detection, and consumer protection.",
+
+    hr:
+      "Focus on fair hiring, employment discrimination, accessibility, privacy, and responsible employee evaluation.",
+
+    legal:
+      "Focus on legal compliance, accountability, privacy, transparency, and the limitations of automated legal decisions.",
+
+    education:
+      "Focus on equal learning opportunities, student privacy, fair grading, accessibility, and responsible educational AI.",
+
+    general:
+      "Focus on responsible AI principles, fairness, transparency, privacy, safety, and accountability."
+  };
+
+  return hints[domain] || hints.general;
 }
 
-// Build system prompt
 function buildSystemPrompt(
   currentDomain,
   currentIntent,
   previousDomain,
   previousIntent
 ) {
-  const domainChanged =
-    previousDomain !== "general" &&
-    currentDomain !== "general" &&
-    currentDomain !== previousDomain;
+  const domainHint = getDomainHint(currentDomain);
 
-  const intentChanged =
-    previousIntent !== "general" &&
-    currentIntent !== "general" &&
-    currentIntent !== previousIntent;
+  return `
+You are an AI Ethics Advisor focused on responsible and ethical AI.
 
-return `
-You are an AI Ethics Advisor focused on responsible AI.
+Your job is to help users understand AI ethics clearly and practically.
 
-Current context:
-- Domain: ${currentDomain}
-- Intent: ${currentIntent}
+CURRENT CONTEXT
+- Detected domain: ${currentDomain}
+- Detected intent: ${currentIntent}
+- Previous domain: ${previousDomain || "none"}
+- Previous intent: ${previousIntent || "none"}
 
-Instructions:
-- Give clear, practical answers.
-- Use simple language.
-- Explain briefly why your recommendation is appropriate.
-- Avoid unnecessary jargon.
-- Return valid JSON only.
+DOMAIN GUIDANCE
+${domainHint}
 
-Domain guidance:
-${getDomainHint(currentDomain)}
+RESPONSE RULES
+1. Use simple, clear English.
+2. Explain technical terms when necessary.
+3. Be respectful, neutral, and practical.
+4. Identify ethical risks and explain why they matter.
+5. Give actionable suggestions when appropriate.
+6. Do not invent laws, legal citations, research papers, or sources.
+7. Distinguish general ethical guidance from legal requirements.
+8. Do not claim that AI systems are completely fair, safe, or unbiased.
+9. Keep answers focused on the user's question.
+10. If the question is unrelated to AI ethics, answer briefly when appropriate and explain the connection to responsible AI if useful.
+11. If the domain or intent changes, adapt your answer to the new topic.
+12. Never claim to have verified a source unless you actually have reliable information supporting that claim.
+13. Write explanations in a way that a student or beginner can understand.
 
-Return a JSON object with these fields:
+OUTPUT FORMAT
+Return exactly one valid JSON object.
+Do not use Markdown code fences.
+Do not add text before or after the JSON object.
+
+Use this structure:
 {
-  "answer": "A clear response",
-  "intent": "bias|fairness|privacy|transparency|governance|general",
-  "domain": "healthcare|finance|hr|legal|education|general",
-  "explanation": "Short reasoning",
-  "confidence": "high|medium|low",
+  "answer": "A clear answer to the user's question",
+  "intent": "${currentIntent}",
+  "domain": "${currentDomain}",
+  "explanation": "A short explanation of the ethical reasoning",
+  "confidence": 0.85,
   "references": [],
-  "suggestions": []
-}
-`;
-
-Current context:
-- Domain: ${currentDomain}
-- Intent: ${currentIntent}
-
-${
-  domainChanged
-    ? `The domain changed from ${previousDomain} to ${currentDomain}. Adapt your answer accordingly.`
-    : ""
+  "suggestions": [
+    "A practical suggestion"
+  ]
 }
 
-${
-  intentChanged
-    ? `The intent changed from ${previousIntent} to ${currentIntent}. Adjust your response accordingly.`
-    : ""
-}
-
-Instructions:
-- Provide clear, practical answers.
-- Use simple language and avoid unnecessary technical terms.
-- Explain briefly why your recommendation is appropriate.
-- Consider the risks and limitations of AI systems.
-- Do not present legal or medical information as definitive professional advice.
-- Use relevant regulatory references when appropriate.
-- Return valid JSON only. Do not use Markdown code fences.
-
-Domain guidance:
-${getDomainHint(currentDomain)}
-
-Return a JSON object with exactly these fields:
-{
-  "answer": "A clear response in 2-5 sentences",
-  "intent": "bias|fairness|privacy|transparency|governance|general",
-  "domain": "healthcare|finance|hr|legal|education|general",
-  "explanation": "A short explanation of the reasoning",
-  "confidence": "high|medium|low",
-  "references": ["Relevant law or ethical framework"],
-  "suggestions": ["Follow-up question 1", "Follow-up question 2"]
-}
-
-Ensure the domain and intent values match the available categories.
+FIELD RULES
+- answer: string containing the main response.
+- intent: string identifying the relevant ethical topic.
+- domain: string identifying the relevant application domain.
+- explanation: string explaining the reasoning.
+- confidence: number between 0 and 1 representing confidence in the classification and response.
+- references: array of real, relevant references. Use an empty array if reliable references are unavailable.
+- suggestions: array of practical suggestions.
 `;
 }
 
-// Validate conversation messages
 function validateMessages(messages) {
-  return (
-    Array.isArray(messages) &&
-    messages.length > 0 &&
-    messages.every(
-      (message) =>
-        message &&
-        ["user", "assistant"].includes(message.role) &&
-        typeof message.content === "string"
-    ) &&
-    messages[messages.length - 1].role === "user"
-  );
-}
-
-// Chat endpoint
-app.post("/api/chat", async (req, res) => {
-  const {
-    messages,
-    currentDomain = "general",
-    currentIntent = "general",
-  } = req.body || {};
-
-  if (!validateMessages(messages)) {
-    return res.status(400).json({
-      error:
-        "Provide a non-empty messages array with valid roles and string content. The latest message must be from the user.",
-    });
+  if (!Array.isArray(messages) || messages.length === 0) {
+    return "Messages must be a non-empty array.";
   }
 
-  const latestMessage = messages[messages.length - 1].content;
+  for (const message of messages) {
+    if (!message || typeof message !== "object") {
+      return "Each message must be an object.";
+    }
 
-  // Use the scoring-based classifiers from mlModel.js
-  const detectedDomain = detectDomainML(latestMessage);
-  const detectedIntent = detectIntentML(latestMessage);
+    if (
+      message.role !== "user" &&
+      message.role !== "assistant"
+    ) {
+      return "Message role must be user or assistant.";
+    }
 
-  // Preserve the previous context when the new message is general
-  const previousDomain = currentDomain;
-  const previousIntent = currentIntent;
+    if (
+      typeof message.content !== "string" ||
+      message.content.trim().length === 0
+    ) {
+      return "Message content must be a non-empty string.";
+    }
 
-  const resolvedDomain =
-    detectedDomain === "general" && previousDomain !== "general"
-      ? previousDomain
-      : detectedDomain;
+    if (message.content.length > 12000) {
+      return "A message cannot exceed 12000 characters.";
+    }
+  }
 
-  const resolvedIntent =
-    detectedIntent === "general" && previousIntent !== "general"
-      ? previousIntent
-      : detectedIntent;
+  if (messages[messages.length - 1].role !== "user") {
+    return "The last message must be from the user.";
+  }
 
-  const domainChanged =
-    previousDomain !== "general" &&
-    resolvedDomain !== "general" &&
-    previousDomain !== resolvedDomain;
+  return null;
+}
 
-  const intentChanged =
-    previousIntent !== "general" &&
-    resolvedIntent !== "general" &&
-    previousIntent !== resolvedIntent;
+function parseAIResponse(content) {
+  if (typeof content !== "string" || !content.trim()) {
+    throw new Error("The AI returned an empty response.");
+  }
+
+  const cleaned = content
+    .trim()
+    .replace(/^```(?:json)?\s*/i, "")
+    .replace(/\s*```$/, "");
 
   try {
-    const completion = await groq.chat.completions.create({
-      model: MODEL,
-      max_tokens: 1024,
-      messages: [
-        {
-          role: "system",
-          content: buildSystemPrompt(
-            resolvedDomain,
-            resolvedIntent,
-            previousDomain,
-            previousIntent
-          ),
-        },
-        ...messages.map(({ role, content }) => ({
-          role,
-          content,
-        })),
-      ],
-    });
+    const parsed = JSON.parse(cleaned);
 
-    const rawText =
-      completion.choices?.[0]?.message?.content?.trim() || "";
-
-    if (!rawText) {
-      throw new Error("The AI model returned an empty response.");
-    }
-
-    let parsed;
-
-    try {
-      const cleanedText = rawText
-        .replace(/^```json\s*/i, "")
-        .replace(/^```\s*/, "")
-        .replace(/\s*```$/, "")
-        .trim();
-
-      parsed = JSON.parse(cleanedText);
-
-      if (
-        !parsed ||
-        typeof parsed !== "object" ||
-        Array.isArray(parsed) ||
-        typeof parsed.answer !== "string"
-      ) {
-        throw new Error("The AI response did not match the expected format.");
-      }
-    } catch (parseError) {
-      if (parseError instanceof SyntaxError) {
-        console.error("Could not parse model JSON response.");
-      } else {
-        console.error("Invalid model response format:", parseError.message);
-      }
-
-      parsed = {
-        answer: rawText,
-        intent: resolvedIntent,
-        domain: resolvedDomain,
-        explanation: "",
-        confidence: "medium",
-        references: [],
-        suggestions: [],
-      };
-    }
-
-    return res.json({
-      ...parsed,
-      detectedDomain: resolvedDomain,
-      detectedIntent: resolvedIntent,
-      domainChanged,
-      intentChanged,
-      previousDomain,
-      previousIntent,
-    });
-  } catch (err) {
-    console.error("Groq API error:", {
-      status: err.status,
-      message: err.message,
-      code: err.code,
-    });
-
-    if (err.status === 401) {
-      return res.status(502).json({
-        error: "The Groq API key is invalid or expired. Check GROQ_API_KEY in Render.",
-      });
-    }
-
-    if (err.status === 404) {
-      return res.status(502).json({
-        error: "The configured Groq model was not found or is unavailable to your account.",
-      });
-    }
-
-    if (err.status === 429) {
-      return res.status(503).json({
-        error: "The AI service is temporarily rate-limited. Please try again shortly.",
-      });
-    }
-
-    return res.status(502).json({
-      error: "Unable to get an AI response. Please try again later.",
-    });
+    return {
+      answer:
+        typeof parsed.answer === "string"
+          ? parsed.answer
+          : content,
+      intent:
+        typeof parsed.intent === "string"
+          ? parsed.intent
+          : "general",
+      domain:
+        typeof parsed.domain === "string"
+          ? parsed.domain
+          : "general",
+      explanation:
+        typeof parsed.explanation === "string"
+          ? parsed.explanation
+          : "",
+      confidence:
+        typeof parsed.confidence === "number"
+          ? Math.max(0, Math.min(1, parsed.confidence))
+          : 0.7,
+      references:
+        Array.isArray(parsed.references)
+          ? parsed.references
+          : [],
+      suggestions:
+        Array.isArray(parsed.suggestions)
+          ? parsed.suggestions
+          : []
+    };
+  } catch {
+    return {
+      answer: content,
+      intent: "general",
+      domain: "general",
+      explanation:
+        "The response could not be parsed into the expected JSON format.",
+      confidence: 0.5,
+      references: [],
+      suggestions: []
+    };
   }
+}
+
+app.get("/", (req, res) => {
+  res.json({
+    status: "ok",
+    message: "AI Ethics Advisor backend is running."
+  });
 });
 
-// Health check
 app.get("/api/health", (req, res) => {
   res.json({
     status: "ok",
     model: MODEL,
-    timestamp: new Date().toISOString(),
+    timestamp: new Date().toISOString()
   });
 });
 
-// Start server
-app.listen(PORT, () => {
-  console.log(`AI Ethics Chatbot running on port ${PORT}`);
-  console.log(`Configured model: ${MODEL}`);
-  console.log(`Health endpoint: /api/health`);
+app.post("/api/chat", async (req, res) => {
+  try {
+    const {
+      messages,
+      currentDomain,
+      currentIntent,
+      previousDomain,
+      previousIntent
+    } = req.body || {};
+
+    const validationError = validateMessages(messages);
+
+    if (validationError) {
+      return res.status(400).json({
+        error: validationError
+      });
+    }
+
+    const latestMessage =
+      messages[messages.length - 1].content.trim();
+
+    let detectedDomain = "general";
+    let detectedIntent = "general";
+
+    try {
+      detectedDomain =
+        detectDomainML(latestMessage) || "general";
+
+      detectedIntent =
+        detectIntentML(latestMessage) || "general";
+    } catch (classificationError) {
+      console.error(
+        "Classification error:",
+        classificationError.message
+      );
+    }
+
+    const finalDomain =
+      detectedDomain !== "general"
+        ? detectedDomain
+        : currentDomain || previousDomain || "general";
+
+    const finalIntent =
+      detectedIntent !== "general"
+        ? detectedIntent
+        : currentIntent || previousIntent || "general";
+
+    const domainChanged =
+      Boolean(previousDomain) &&
+      previousDomain !== finalDomain;
+
+    const intentChanged =
+      Boolean(previousIntent) &&
+      previousIntent !== finalIntent;
+
+    const systemPrompt = buildSystemPrompt(
+      finalDomain,
+      finalIntent,
+      previousDomain,
+      previousIntent
+    );
+
+    const conversationMessages = messages.map(message => ({
+      role: message.role,
+      content: message.content.trim()
+    }));
+
+    const completion =
+      await groq.chat.completions.create({
+        model: MODEL,
+        messages: [
+          {
+            role: "system",
+            content: systemPrompt
+          },
+          ...conversationMessages
+        ],
+        max_tokens: 1024,
+        temperature: 0.3,
+        response_format: {
+          type: "json_object"
+        }
+      });
+
+    const aiContent =
+      completion.choices?.[0]?.message?.content;
+
+    const parsedResponse = parseAIResponse(aiContent);
+
+    return res.status(200).json({
+      ...parsedResponse,
+      domain: finalDomain,
+      intent: finalIntent,
+      detectedDomain,
+      detectedIntent,
+      domainChanged,
+      intentChanged,
+      model: MODEL
+    });
+  } catch (error) {
+    const status = error.status || error.statusCode;
+
+    console.error("Chat request failed:", {
+      status,
+      code: error.code,
+      message: error.message
+    });
+
+    if (status === 401) {
+      return res.status(502).json({
+        error:
+          "Groq authentication failed. Check the GROQ_API_KEY configured on Render."
+      });
+    }
+
+    if (status === 404) {
+      return res.status(502).json({
+        error:
+          "The configured Groq model was not found or is unavailable. Check the model ID."
+      });
+    }
+
+    if (status === 429) {
+      return res.status(429).json({
+        error:
+          "The AI service is temporarily rate-limited. Please try again shortly."
+      });
+    }
+
+    if (
+      error instanceof SyntaxError &&
+      error.status === 400
+    ) {
+      return res.status(400).json({
+        error: "Invalid JSON request body."
+      });
+    }
+
+    return res.status(502).json({
+      error:
+        "The AI service could not process your request. Please try again."
+    });
+  }
 });
-```
+
+app.use((req, res) => {
+  res.status(404).json({
+    error: "Endpoint not found."
+  });
+});
+
+app.use((error, req, res, next) => {
+  console.error("Server error:", error.message);
+
+  if (res.headersSent) {
+    return next(error);
+  }
+
+  res.status(500).json({
+    error: "An unexpected server error occurred."
+  });
+});
+
+app.listen(PORT, () => {
+  console.log(`AI Ethics Advisor backend running on port ${PORT}`);
+  console.log(`Groq model configured: ${MODEL}`);
+});
